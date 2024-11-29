@@ -1,39 +1,57 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';  // to tap into the observable response
+import { BehaviorSubject, interval, Observable } from 'rxjs';
+import { switchMap, tap } from 'rxjs/operators';
 
 @Injectable({
   providedIn: 'root'
 })
 export class VersionCheckService {
-  private versionFile = 'assets/version.json';
+  private updateSubject = new BehaviorSubject<boolean>(false);
+  public updateAvailable$ = this.updateSubject.asObservable();
+
+  private versionFile = 'assets/Mics/version.json';
+  private pollingInterval = 30000;
+  private currentVersion: string | null = null;
+
 
   constructor(private http: HttpClient) {
-    this.initializeCurrentVersion();
+      this.initializeCurrentVersion();
+      this.startPolling();
   }
 
   private initializeCurrentVersion(): void {
-    if (!sessionStorage.getItem('currentVersion')) {
-      this.http.get<any>(this.versionFile).pipe(
-        tap(response => {
-          const currentVersion = response.version || '1.0.0';  
-          sessionStorage.setItem('currentVersion', currentVersion);
-        })
-      ).subscribe();
-    }
+      this.currentVersion = sessionStorage.getItem('currentVersion');
+      if (!this.currentVersion) {
+          this.http.get<{ version: string }>(this.versionFile).pipe(
+              tap((response) => {
+                  const currentVersion = response.version;
+                  sessionStorage.setItem('currentVersion', currentVersion);
+                  this.currentVersion = currentVersion; 
+              })
+          ).subscribe({
+              error: (error) => console.error('Error initializing current version:', error)
+          });
+      }
   }
 
-  checkForUpdates(): Observable<any> {
-    return this.http.get<any>(this.versionFile);
-  }
-
-  isUpdateAvailable(newVersion: string): boolean {
-    const currentVersion = sessionStorage.getItem('currentVersion') ; 
-    return newVersion !== currentVersion;
-  }
-
-  updateVersion(newVersion: string): void {
-    sessionStorage.setItem('currentVersion', newVersion);
+  private startPolling(): void {
+      interval(this.pollingInterval)
+          .pipe(
+              switchMap(() => this.http.get<{ version: string }>(this.versionFile)),
+              tap({
+                  next: (response) => {
+                      const newVersion = response.version;
+                      console.log('Polling triggered:', new Date(), 'New version:', newVersion,'  current version',this.currentVersion);  
+                      if (newVersion && this.currentVersion !== newVersion) {
+                          this.updateSubject.next(true);
+                          this.currentVersion = newVersion;
+                          sessionStorage.setItem('currentVersion', newVersion);
+                      }
+                  },
+                  error: (error) => console.error('Error fetching version file:', error)
+              })
+          )
+          .subscribe();
   }
 }
